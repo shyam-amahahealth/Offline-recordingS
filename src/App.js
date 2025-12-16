@@ -15,7 +15,6 @@ function App() {
   const [sessionId] = useState(
     () => `audio_session_${Date.now()}_${Math.floor(Math.random() * 10000)}`
   );
-  // ...existing code...
   // Persist permission status in localStorage
   const [permission, setPermission] = useState(() => {
     const stored = localStorage.getItem("mic_permission");
@@ -28,11 +27,24 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [lastAudioUrl, setLastAudioUrl] = useState("");
+  // Log state for debugging
+  const [log, setLog] = useState([]);
+
+  // Helper to add log entries
+  const addLog = (msg) =>
+    setLog((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
   // Request permission for audio
   const requestPermission = async () => {
-    if (permission === "granted") return; // Don't ask again
+    addLog("Requesting microphone permission...");
+    if (permission === "granted") {
+      addLog("Permission already granted.");
+      return; // Don't ask again
+    }
     if (isWebView()) {
+      addLog(
+        "Detected WebView environment. Sending permission request to native app."
+      );
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(
           JSON.stringify({ type: "REQUEST_MIC_PERMISSION" })
@@ -43,11 +55,22 @@ function App() {
         (event) => {
           try {
             const data = JSON.parse(event.data);
+            addLog(
+              `Native app responded: permission ${
+                data.granted ? "granted" : "denied"
+              } 61`
+            );
+
             if (data.type === "MIC_PERMISSION_RESULT") {
               setPermission(data.granted ? "granted" : "denied");
               localStorage.setItem(
                 "mic_permission",
                 data.granted ? "granted" : "denied"
+              );
+              addLog(
+                `Native app responded: permission ${
+                  data.granted ? "granted" : "denied"
+                }`
               );
             }
           } catch {}
@@ -59,10 +82,12 @@ function App() {
         await navigator.mediaDevices.getUserMedia({ audio: true });
         setPermission("granted");
         localStorage.setItem("mic_permission", "granted");
+        addLog("Browser permission granted.");
       } catch (e) {
         setPermission("denied");
         localStorage.setItem("mic_permission", "denied");
         setError("Microphone permission denied.");
+        addLog("Browser permission denied: " + e.message);
       }
     }
   };
@@ -70,6 +95,7 @@ function App() {
   // Start recording
   const startRecording = async () => {
     setError("");
+    addLog("Attempting to start recording...");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -84,6 +110,7 @@ function App() {
       // Fallback if browser does not support opus
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
         options.mimeType = "audio/webm";
+        addLog("Opus not supported, using fallback mimeType.");
       }
       const mediaRecorder = new window.MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
@@ -94,8 +121,10 @@ function App() {
       };
       mediaRecorder.start(1000); // 1s chunks (60 chunks = 60s)
       setRecording(true);
+      addLog("Recording started.");
     } catch (e) {
       setError("Could not start recording: " + e.message);
+      addLog("Failed to start recording: " + e.message);
     }
   };
   // Auto-upload 60s of buffered chunks every 60 seconds while recording
@@ -124,6 +153,7 @@ function App() {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
       setRecording(false);
+      addLog("Recording stopped.");
     }
   };
 
@@ -131,6 +161,7 @@ function App() {
   const uploadChunks = async () => {
     setUploading(true);
     setUploadStatus("Uploading...");
+    addLog("Uploading audio chunks to Cloudinary...");
     // Cloudinary configuration for unsigned upload
     const CLOUDINARY_CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME;
     const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET;
@@ -163,11 +194,13 @@ function App() {
       setUploadStatus(
         "All chunks uploaded to Cloudinary and local storage cleared."
       );
+      addLog("Upload successful. All chunks uploaded.");
       if (uploadedUrls.length > 0) {
         setLastAudioUrl(uploadedUrls[uploadedUrls.length - 1]);
       }
     } catch (e) {
       setUploadStatus("Upload failed: " + e.message);
+      addLog("Upload failed: " + e.message);
     }
     setUploading(false);
   };
@@ -192,6 +225,35 @@ function App() {
     <div className="App">
       <header className="App-header">
         <h2>Audio Recorder</h2>
+        <div
+          style={{
+            textAlign: "left",
+            maxWidth: 400,
+            margin: "0 auto",
+            background: "#222",
+            color: "#fff",
+            padding: 12,
+            borderRadius: 8,
+            fontSize: 12,
+            marginBottom: 16,
+          }}
+        >
+          <b>Debug Log:</b>
+          <div
+            style={{
+              maxHeight: 120,
+              overflowY: "auto",
+              marginTop: 4,
+              fontFamily: "monospace",
+            }}
+          >
+            {log.length === 0 ? (
+              <span style={{ color: "#888" }}>No events yet.</span>
+            ) : (
+              log.map((l, i) => <div key={i}>{l}</div>)
+            )}
+          </div>
+        </div>
         {permission !== "granted" ? (
           <>
             <button onClick={requestPermission}>
