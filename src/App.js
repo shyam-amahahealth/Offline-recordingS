@@ -131,9 +131,10 @@ function App() {
   const uploadChunks = async () => {
     setUploading(true);
     setUploadStatus("Uploading...");
-    // Cloudinary configuration from .env file
-    const CLOUDINARY_URL = process.env.REACT_APP_CLOUDINARY_URL;
+    // Cloudinary configuration for unsigned upload
+    const CLOUDINARY_CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME;
     const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET;
+    const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/raw/upload`;
     try {
       let allBlobs = await getAllChunks();
       let uploadedUrls = [];
