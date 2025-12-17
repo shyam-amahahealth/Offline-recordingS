@@ -10,6 +10,7 @@ function App() {
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [hasPendingChunks, setHasPendingChunks] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [lastAudioUrl, setLastAudioUrl] = useState("");
   const [log, setLog] = useState([]);
@@ -50,13 +51,28 @@ function App() {
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
       setRecording(false);
       addLog("Recording stopped.");
+
+      // Save the current chunk if any
+      if (chunkBufferRef.current.length > 0) {
+        const blob = new Blob(chunkBufferRef.current);
+        await saveChunk(blob, `${Date.now()}-${Math.random()}`);
+        chunkBufferRef.current = [];
+      }
+
+      // Upload all pending chunks in local storage
+      await uploadChunks();
     }
   };
+
+  const checkPendingChunks = useCallback(async () => {
+    const allBlobs = await getAllChunks();
+    setHasPendingChunks(allBlobs.length > 0);
+  }, []);
 
   const uploadChunks = useCallback(async () => {
     setUploading(true);
@@ -76,8 +92,14 @@ function App() {
         const { chunk, id } = allBlobs[i];
         const publicId = `${sessionId}_${Date.now()}_${i}`;
 
+        // Ensure the chunk is a Blob of the correct type
+        let audioBlob = chunk;
+        if (!(chunk instanceof Blob) || chunk.type !== "audio/webm") {
+          audioBlob = new Blob([chunk], { type: "audio/webm" });
+        }
+
         const formData = new FormData();
-        formData.append("file", chunk, `${publicId}.webm`);
+        formData.append("file", audioBlob, `${publicId}.webm`);
         formData.append("upload_preset", UPLOAD_PRESET);
         formData.append("public_id", publicId);
 
@@ -107,7 +129,12 @@ function App() {
     }
 
     setUploading(false);
-  }, [sessionId]);
+    checkPendingChunks();
+  }, [sessionId, checkPendingChunks]);
+
+  useEffect(() => {
+    checkPendingChunks();
+  }, [checkPendingChunks]);
 
   useEffect(() => {
     if (!recording) return;
@@ -169,7 +196,7 @@ function App() {
 
         <button
           onClick={uploadChunks}
-          disabled={uploading}
+          disabled={uploading || !hasPendingChunks}
           style={{ marginLeft: 8 }}
         >
           Upload Chunks
@@ -182,7 +209,10 @@ function App() {
         {lastAudioUrl && (
           <div style={{ marginTop: 12 }}>
             <p>Last uploaded audio:</p>
-            <audio controls src={lastAudioUrl} />
+            <audio controls src={lastAudioUrl}>
+              <source src={lastAudioUrl} type="audio/webm" />
+              Your browser does not support the audio element.
+            </audio>
           </div>
         )}
       </header>
