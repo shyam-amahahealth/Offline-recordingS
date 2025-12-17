@@ -126,14 +126,10 @@ This approach leverages native permission dialogs for security and compliance, w
 
 ## 10. Future Improvements
 - Merge uploaded chunks into a single audio file for playback/download.
-- Add user authentication and per-user storage.
 - Support for other audio formats (e.g., mp3, wav).
-- Improved mobile support and UI polish.
-- Unified chunk format and upload logic between web and mobile.
-- Cross-platform playback and management of uploaded files.
 
 ## 11. Author & Date
 
-- Author: [Your Name]
+- Author: Shyam Tiwari
 - Date: December 17, 2025
 - Project: Audio Recording POC
