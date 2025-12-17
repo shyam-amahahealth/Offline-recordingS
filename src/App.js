@@ -6,7 +6,6 @@ function App() {
   const [sessionId] = useState(
     () => `audio_session_${Date.now()}_${Math.floor(Math.random() * 10000)}`
   );
-
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -14,206 +13,247 @@ function App() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [lastAudioUrl, setLastAudioUrl] = useState("");
   const [log, setLog] = useState([]);
+  const [micPermission, setMicPermission] = useState("prompt");
 
   const mediaRecorderRef = useRef(null);
   const chunkBufferRef = useRef([]);
 
   const addLog = (msg) =>
-    setLog((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    setLog((p) => [...p, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+
+  const safeSaveChunk = async (blob, id) => {
+    try {
+      await saveChunk(blob, id);
+    } catch (e) {
+      setError("Local storage access revoked.");
+      addLog("Storage error: " + e.message);
+      setHasPendingChunks(false);
+    }
+  };
 
   const startRecording = async () => {
     setError("");
-    addLog("Attempting to start recording...");
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const tracks = stream.getAudioTracks();
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
 
-      if (!tracks || tracks.length === 0) {
-        throw new Error("No audio tracks available");
-      }
-
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunkBufferRef.current.push(e.data);
-        }
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunkBufferRef.current.push(e.data);
       };
 
-      mediaRecorder.start(1000);
+      recorder.start(1000);
       setRecording(true);
-      addLog("Recording started successfully.");
+      addLog("Recording started");
     } catch (e) {
-      setError("Could not start recording: " + e.message);
-      addLog("Recording failed: " + e.name + " - " + e.message);
+      setError(e.message);
+      addLog("Recording failed: " + e.message);
     }
   };
 
   const stopRecording = async () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      setRecording(false);
-      addLog("Recording stopped.");
+    if (!mediaRecorderRef.current) return;
 
-      // Save the current chunk if any
-      if (chunkBufferRef.current.length > 0) {
-        const blob = new Blob(chunkBufferRef.current);
-        await saveChunk(blob, `${Date.now()}-${Math.random()}`);
-        chunkBufferRef.current = [];
-      }
+    mediaRecorderRef.current.stop();
+    setRecording(false);
 
-      // Upload all pending chunks in local storage
-      await uploadChunks();
+    if (chunkBufferRef.current.length) {
+      const blob = new Blob(chunkBufferRef.current, { type: "audio/webm" });
+      await safeSaveChunk(blob, `${Date.now()}-${Math.random()}`);
+      chunkBufferRef.current = [];
     }
+
+    await uploadChunks();
   };
 
   const checkPendingChunks = useCallback(async () => {
-    const allBlobs = await getAllChunks();
-    setHasPendingChunks(allBlobs.length > 0);
-  }, []);
-
-  const uploadChunks = useCallback(async () => {
-    setUploading(true);
-    setUploadStatus("Uploading...");
-    addLog("Uploading audio chunks...");
-
-    const CLOUDINARY_CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME;
-    const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET;
-
-    const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/raw/upload`;
-
     try {
-      const allBlobs = await getAllChunks();
-      let uploadedUrls = [];
-
-      for (let i = 0; i < allBlobs.length; i++) {
-        const { chunk, id } = allBlobs[i];
-        const publicId = `${sessionId}_${Date.now()}_${i}`;
-
-        // Ensure the chunk is a Blob of the correct type
-        let audioBlob = chunk;
-        if (!(chunk instanceof Blob) || chunk.type !== "audio/webm") {
-          audioBlob = new Blob([chunk], { type: "audio/webm" });
-        }
-
-        const formData = new FormData();
-        formData.append("file", audioBlob, `${publicId}.webm`);
-        formData.append("upload_preset", UPLOAD_PRESET);
-        formData.append("public_id", publicId);
-
-        const res = await fetch(CLOUDINARY_URL, {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!res.ok) throw new Error("Upload failed");
-
-        const data = await res.json();
-        if (data.secure_url) {
-          uploadedUrls.push(data.secure_url);
-          await deleteChunkById(id);
-        }
-      }
-
-      setUploadStatus("Upload successful.");
-      addLog("All chunks uploaded successfully.");
-
-      if (uploadedUrls.length > 0) {
-        setLastAudioUrl(uploadedUrls[uploadedUrls.length - 1]);
-      }
-    } catch (e) {
-      setUploadStatus("Upload failed: " + e.message);
-      addLog("Upload error: " + e.message);
+      const all = await getAllChunks();
+      setHasPendingChunks(all.length > 0);
+    } catch {
+      setHasPendingChunks(false);
     }
-
-    setUploading(false);
-    checkPendingChunks();
-  }, [sessionId, checkPendingChunks]);
-
-  useEffect(() => {
-    checkPendingChunks();
-  }, [checkPendingChunks]);
-
-  useEffect(() => {
-    if (!recording) return;
-
-    chunkBufferRef.current = [];
-
-    const interval = setInterval(async () => {
-      if (chunkBufferRef.current.length > 0) {
-        const blob = new Blob(chunkBufferRef.current);
-        await saveChunk(blob, `${Date.now()}-${Math.random()}`);
-        await uploadChunks();
-        chunkBufferRef.current = [];
-      }
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [recording, uploadChunks]);
+  }, []);
 
   const deleteChunkById = (id) =>
     new Promise((resolve, reject) => {
-      const request = indexedDB.open("audio-recording-db", 1);
-      request.onsuccess = (e) => {
+      const req = indexedDB.open("audio-recording-db", 1);
+      req.onsuccess = (e) => {
         const db = e.target.result;
         const tx = db.transaction("audioChunks", "readwrite");
         tx.objectStore("audioChunks").delete(id);
         tx.oncomplete = resolve;
         tx.onerror = reject;
       };
-      request.onerror = reject;
+      req.onerror = reject;
     });
+
+  const uploadChunks = useCallback(async () => {
+    try {
+      setUploading(true);
+      setUploadStatus("Uploading...");
+
+      const CLOUD_NAME = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME;
+      const PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET;
+      const URL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/raw/upload`;
+
+      const chunks = await getAllChunks();
+      const urls = [];
+
+      for (let i = 0; i < chunks.length; i++) {
+        const { chunk, id } = chunks[i];
+        const publicId = `${sessionId}_${Date.now()}_${i}`;
+        const blob =
+          chunk instanceof Blob
+            ? chunk
+            : new Blob([chunk], { type: "audio/webm" });
+
+        const fd = new FormData();
+        fd.append("file", blob, `${publicId}.webm`);
+        fd.append("upload_preset", PRESET);
+        fd.append("public_id", publicId);
+
+        const res = await fetch(URL, { method: "POST", body: fd });
+        if (!res.ok) throw new Error("Upload failed");
+
+        const data = await res.json();
+        if (data.secure_url) {
+          urls.push(data.secure_url);
+          await deleteChunkById(id);
+        }
+      }
+
+      if (urls.length) setLastAudioUrl(urls.at(-1));
+      setUploadStatus("Upload successful");
+    } catch (e) {
+      setUploadStatus("Upload failed");
+      setError(e.message);
+    } finally {
+      setUploading(false);
+      checkPendingChunks();
+    }
+  }, [sessionId, checkPendingChunks]);
+
+  useEffect(() => {
+    checkPendingChunks();
+
+    if (navigator.storage?.persist) {
+      navigator.storage.persist();
+    }
+  }, [checkPendingChunks]);
+
+  // Listen for microphone permission changes and update localStorage
+  useEffect(() => {
+    if (!navigator.permissions) return;
+
+    let permissionStatus;
+    navigator.permissions.query({ name: "microphone" }).then((status) => {
+      permissionStatus = status;
+      setMicPermission(status.state);
+      localStorage.setItem("microphone_permission", status.state);
+      status.onchange = () => {
+        setMicPermission(status.state);
+        localStorage.setItem("microphone_permission", status.state);
+        if (status.state === "denied") {
+          setError("Microphone permission revoked");
+          setRecording(false);
+          mediaRecorderRef.current?.stop();
+        } else if (status.state === "granted") {
+          setError("");
+        }
+      };
+    });
+    return () => {
+      if (permissionStatus) permissionStatus.onchange = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!recording) return;
+
+    chunkBufferRef.current = [];
+
+    const i = setInterval(async () => {
+      if (chunkBufferRef.current.length) {
+        const blob = new Blob(chunkBufferRef.current, { type: "audio/webm" });
+        await safeSaveChunk(blob, `${Date.now()}-${Math.random()}`);
+        await uploadChunks();
+        chunkBufferRef.current = [];
+      }
+    }, 60000);
+
+    return () => clearInterval(i);
+  }, [recording, uploadChunks, safeSaveChunk]);
 
   return (
     <div className="App">
       <header className="App-header">
         <h2>Audio Recorder</h2>
 
-        <div
-          style={{
-            background: "#222",
-            color: "#fff",
-            padding: 12,
-            borderRadius: 8,
-            maxHeight: 150,
-            overflowY: "auto",
-            fontFamily: "monospace",
-            marginBottom: 12,
-            fontSize: 12,
-          }}
-        >
-          <b>Debug Log</b>
-          {log.map((l, i) => (
-            <div key={i}>{l}</div>
-          ))}
-        </div>
-
-        <button onClick={recording ? stopRecording : startRecording}>
-          {recording ? "Stop Recording" : "Start Recording"}
-        </button>
-
-        <button
-          onClick={uploadChunks}
-          disabled={uploading || !hasPendingChunks}
-          style={{ marginLeft: 8 }}
-        >
-          Upload Chunks
-        </button>
-
-        {error && <p style={{ color: "red" }}>{error}</p>}
-        <p>{recording ? "Recording..." : "Not recording"}</p>
-        {uploadStatus && <p>{uploadStatus}</p>}
-
-        {lastAudioUrl && (
-          <div style={{ marginTop: 12 }}>
-            <p>Last uploaded audio:</p>
-            <audio controls src={lastAudioUrl}>
-              <source src={lastAudioUrl} type="audio/webm" />
-              Your browser does not support the audio element.
-            </audio>
+        {/* Show CTA if mic permission is not granted */}
+        {micPermission !== "granted" ? (
+          <div style={{ margin: 20, color: "#fff", background: "#c00", padding: 16, borderRadius: 8 }}>
+            <p>Microphone access is required to record audio.</p>
+            <button
+              onClick={async () => {
+                try {
+                  await navigator.mediaDevices.getUserMedia({ audio: true });
+                } catch (e) {
+                  setError("Microphone permission denied");
+                }
+              }}
+              style={{ padding: "8px 16px", fontSize: 16, borderRadius: 4 }}
+            >
+              Ask for Microphone Permission
+            </button>
           </div>
+        ) : (
+          <>
+            <div
+              style={{
+                background: "#222",
+                color: "#fff",
+                padding: 12,
+                borderRadius: 8,
+                maxHeight: 150,
+                overflowY: "auto",
+                fontFamily: "monospace",
+                marginBottom: 12,
+                fontSize: 12,
+              }}
+            >
+              <b>Debug Log</b>
+              {log.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </div>
+
+            <button onClick={recording ? stopRecording : startRecording}>
+              {recording ? "Stop Recording" : "Start Recording"}
+            </button>
+
+            <button
+              onClick={uploadChunks}
+              disabled={uploading || !hasPendingChunks}
+              style={{ marginLeft: 8 }}
+            >
+              Upload Chunks
+            </button>
+
+            {error && <p style={{ color: "red" }}>{error}</p>}
+            <p>{recording ? "Recording..." : "Not recording"}</p>
+            {uploadStatus && <p>{uploadStatus}</p>}
+
+            {lastAudioUrl && (
+              <div style={{ marginTop: 12 }}>
+                <p>Last uploaded audio:</p>
+                <audio controls src={lastAudioUrl}>
+                  <source src={lastAudioUrl} type="audio/webm" />
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+            )}
+          </>
         )}
       </header>
     </div>
