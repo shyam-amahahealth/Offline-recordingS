@@ -1,13 +1,6 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import "./App.css";
 import { saveChunk, getAllChunks } from "./localAudio";
-
-function isWebView() {
-  return (
-    window.ReactNativeWebView !== undefined ||
-    /wv|webview|reactnative/i.test(navigator.userAgent)
-  );
-}
 
 function App() {
   const [sessionId] = useState(
@@ -27,27 +20,18 @@ function App() {
   const addLog = (msg) =>
     setLog((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
-  /* ============================
-     🎙️ START RECORDING (FIXED)
-     ============================ */
   const startRecording = async () => {
     setError("");
     addLog("Attempting to start recording...");
 
     try {
-      // 🔥 WebView-safe mic access
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
-
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const tracks = stream.getAudioTracks();
-      addLog(`Microphone tracks: ${tracks.length}`);
 
-      if (tracks.length === 0) {
+      if (!tracks || tracks.length === 0) {
         throw new Error("No audio tracks available");
       }
 
-      // 🔥 WebView-safe MediaRecorder (NO options)
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
 
@@ -57,23 +41,15 @@ function App() {
         }
       };
 
-      mediaRecorder.onerror = (e) => {
-        addLog("MediaRecorder error: " + e.error?.message);
-      };
-
-      mediaRecorder.start(1000); // 1s chunks
+      mediaRecorder.start(1000);
       setRecording(true);
       addLog("Recording started successfully.");
     } catch (e) {
-      console.error(e);
       setError("Could not start recording: " + e.message);
-      addLog(`Recording failed: ${e.name} - ${e.message}`);
+      addLog("Recording failed: " + e.name + " - " + e.message);
     }
   };
 
-  /* ============================
-     ⏹️ STOP RECORDING
-     ============================ */
   const stopRecording = () => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
@@ -82,30 +58,7 @@ function App() {
     }
   };
 
-  /* ============================
-     ⏱️ AUTO UPLOAD EVERY 60s
-     ============================ */
-  useEffect(() => {
-    if (!recording) return;
-
-    chunkBufferRef.current = [];
-
-    const interval = setInterval(async () => {
-      if (chunkBufferRef.current.length > 0) {
-        const blob = new Blob(chunkBufferRef.current);
-        await saveChunk(blob, `${Date.now()}-${Math.random()}`);
-        await uploadChunks();
-        chunkBufferRef.current = [];
-      }
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [recording]);
-
-  /* ============================
-     ☁️ UPLOAD TO CLOUDINARY
-     ============================ */
-  const uploadChunks = async () => {
+  const uploadChunks = useCallback(async () => {
     setUploading(true);
     setUploadStatus("Uploading...");
     addLog("Uploading audio chunks...");
@@ -121,10 +74,9 @@ function App() {
 
       for (let i = 0; i < allBlobs.length; i++) {
         const { chunk, id } = allBlobs[i];
-
         const publicId = `${sessionId}_${Date.now()}_${i}`;
-        const formData = new FormData();
 
+        const formData = new FormData();
         formData.append("file", chunk, `${publicId}.webm`);
         formData.append("upload_preset", UPLOAD_PRESET);
         formData.append("public_id", publicId);
@@ -155,11 +107,25 @@ function App() {
     }
 
     setUploading(false);
-  };
+  }, [sessionId]);
 
-  /* ============================
-     🧹 INDEXED DB CLEANUP
-     ============================ */
+  useEffect(() => {
+    if (!recording) return;
+
+    chunkBufferRef.current = [];
+
+    const interval = setInterval(async () => {
+      if (chunkBufferRef.current.length > 0) {
+        const blob = new Blob(chunkBufferRef.current);
+        await saveChunk(blob, `${Date.now()}-${Math.random()}`);
+        await uploadChunks();
+        chunkBufferRef.current = [];
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [recording, uploadChunks]);
+
   const deleteChunkById = (id) =>
     new Promise((resolve, reject) => {
       const request = indexedDB.open("audio-recording-db", 1);
@@ -173,9 +139,6 @@ function App() {
       request.onerror = reject;
     });
 
-  /* ============================
-     🖥️ UI
-     ============================ */
   return (
     <div className="App">
       <header className="App-header">
