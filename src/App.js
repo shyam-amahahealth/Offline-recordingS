@@ -50,33 +50,33 @@ function App() {
           JSON.stringify({ type: "REQUEST_MIC_PERMISSION" })
         );
       }
-      window.addEventListener(
-        "message",
-        (event) => {
-          try {
-            const data = JSON.parse(event.data);
+      // Listen for permission result from React Native WebView (document for RN, window for browser)
+      const handler = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          addLog(
+            `Native app responded: permission ${
+              data.granted ? "granted" : "denied"
+            } (from handler)`
+          );
+          if (data.type === "MIC_PERMISSION_RESULT") {
+            setPermission(data.granted ? "granted" : "denied");
+            localStorage.setItem(
+              "mic_permission",
+              data.granted ? "granted" : "denied"
+            );
             addLog(
               `Native app responded: permission ${
                 data.granted ? "granted" : "denied"
-              } 61`
+              } (from handler)`
             );
-
-            if (data.type === "MIC_PERMISSION_RESULT") {
-              setPermission(data.granted ? "granted" : "denied");
-              localStorage.setItem(
-                "mic_permission",
-                data.granted ? "granted" : "denied"
-              );
-              addLog(
-                `Native app responded: permission ${
-                  data.granted ? "granted" : "denied"
-                }`
-              );
-            }
-          } catch {}
-        },
-        { once: true }
-      );
+          }
+        } catch {}
+      };
+      window.addEventListener("message", handler, { once: true });
+      if (document && document.addEventListener) {
+        document.addEventListener("message", handler, { once: true });
+      }
     } else {
       try {
         await navigator.mediaDevices.getUserMedia({ audio: true });
